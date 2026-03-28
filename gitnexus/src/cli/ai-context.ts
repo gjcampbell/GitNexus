@@ -24,7 +24,7 @@ interface RepoStats {
   processes?: number;
 }
 
-interface AIContextOptions {
+export interface AIContextOptions {
   skipAgentsMd?: boolean;
 }
 
@@ -318,6 +318,9 @@ export async function generateAIContextFiles(
     const claudePath = path.join(repoPath, 'CLAUDE.md');
     const claudeResult = await upsertGitNexusSection(claudePath, content);
     createdFiles.push(`CLAUDE.md (${claudeResult})`);
+  } else {
+    createdFiles.push('AGENTS.md (skipped via --skip-agents-md)');
+    createdFiles.push('CLAUDE.md (skipped via --skip-agents-md)');
   }
 
   // Install skills to .claude/skills/gitnexus/

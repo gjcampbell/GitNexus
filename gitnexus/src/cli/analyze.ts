@@ -254,246 +254,264 @@ export const analyzeCommand = async (inputPath?: string, options?: AnalyzeOption
     }
   }
 
-  // ── Phase 1: Full Pipeline (0–60%) ─────────────────────────────────
-  const pipelineResult = await runPipelineFromRepo(repoPath, (progress) => {
-    const phaseLabel = PHASE_LABELS[progress.phase] || progress.phase;
-    const scaled = Math.round(progress.percent * 0.6);
-    updateBar(scaled, phaseLabel);
-  });
-
-  // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────────
-  updateBar(60, 'Loading into LadybugDB...');
-
-  await closeLbug();
-  const lbugFiles = [lbugPath, `${lbugPath}.wal`, `${lbugPath}.lock`];
-  for (const f of lbugFiles) {
-    try {
-      await fs.rm(f, { recursive: true, force: true });
-    } catch {}
-  }
-
-  const t0Lbug = Date.now();
-  await initLbug(lbugPath);
-  let lbugMsgCount = 0;
-  const lbugResult = await loadGraphToLbug(
-    pipelineResult.graph,
-    pipelineResult.repoPath,
-    storagePath,
-    (msg) => {
-      lbugMsgCount++;
-      const progress = Math.min(84, 60 + Math.round((lbugMsgCount / (lbugMsgCount + 10)) * 24));
-      updateBar(progress, msg);
-    },
-  );
-  const lbugTime = ((Date.now() - t0Lbug) / 1000).toFixed(1);
-  const lbugWarnings = lbugResult.warnings;
-
-  // ── Phase 3: FTS (85–90%) ─────────────────────────────────────────
-  updateBar(85, 'Creating search indexes...');
-
-  const t0Fts = Date.now();
   try {
-    await createFTSIndex('File', 'file_fts', ['name', 'content']);
-    await createFTSIndex('Function', 'function_fts', ['name', 'content']);
-    await createFTSIndex('Class', 'class_fts', ['name', 'content']);
-    await createFTSIndex('Method', 'method_fts', ['name', 'content']);
-    await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
-  } catch (e: any) {
-    // Non-fatal — FTS is best-effort
-  }
-  const ftsTime = ((Date.now() - t0Fts) / 1000).toFixed(1);
+    // ── Phase 1: Full Pipeline (0–60%) ─────────────────────────────────
+    const pipelineResult = await runPipelineFromRepo(repoPath, (progress) => {
+      const phaseLabel = PHASE_LABELS[progress.phase] || progress.phase;
+      const scaled = Math.round(progress.percent * 0.6);
+      updateBar(scaled, phaseLabel);
+    });
 
-  // ── Phase 3.5: Re-insert cached embeddings ────────────────────────
-  if (cachedEmbeddings.length > 0) {
-    // Check if cached embedding dimensions match current schema
-    const cachedDims = cachedEmbeddings[0].embedding.length;
-    const { EMBEDDING_DIMS } = await import('../core/lbug/schema.js');
-    if (cachedDims !== EMBEDDING_DIMS) {
-      // Dimensions changed (e.g. switched embedding model) — discard cache and re-embed all
-      console.error(
-        `⚠️  Embedding dimensions changed (${cachedDims}d → ${EMBEDDING_DIMS}d), discarding cache`,
-      );
-      cachedEmbeddings = [];
-      cachedEmbeddingNodeIds = new Set();
-    } else {
-      updateBar(88, `Restoring ${cachedEmbeddings.length} cached embeddings...`);
-      const EMBED_BATCH = 200;
-      for (let i = 0; i < cachedEmbeddings.length; i += EMBED_BATCH) {
-        const batch = cachedEmbeddings.slice(i, i + EMBED_BATCH);
-        const paramsList = batch.map((e) => ({ nodeId: e.nodeId, embedding: e.embedding }));
-        try {
-          await executeWithReusedStatement(
-            `CREATE (e:CodeEmbedding {nodeId: $nodeId, embedding: $embedding})`,
-            paramsList,
-          );
-        } catch {
-          /* some may fail if node was removed, that's fine */
+    // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────────
+    updateBar(60, 'Loading into LadybugDB...');
+
+    await closeLbug();
+    const lbugFiles = [lbugPath, `${lbugPath}.wal`, `${lbugPath}.lock`];
+    for (const f of lbugFiles) {
+      try {
+        await fs.rm(f, { recursive: true, force: true });
+      } catch {}
+    }
+
+    const t0Lbug = Date.now();
+    await initLbug(lbugPath);
+    let lbugMsgCount = 0;
+    const lbugResult = await loadGraphToLbug(
+      pipelineResult.graph,
+      pipelineResult.repoPath,
+      storagePath,
+      (msg) => {
+        lbugMsgCount++;
+        const progress = Math.min(84, 60 + Math.round((lbugMsgCount / (lbugMsgCount + 10)) * 24));
+        updateBar(progress, msg);
+      },
+    );
+    const lbugTime = ((Date.now() - t0Lbug) / 1000).toFixed(1);
+    const lbugWarnings = lbugResult.warnings;
+
+    // ── Phase 3: FTS (85–90%) ─────────────────────────────────────────
+    updateBar(85, 'Creating search indexes...');
+
+    const t0Fts = Date.now();
+    try {
+      await createFTSIndex('File', 'file_fts', ['name', 'content']);
+      await createFTSIndex('Function', 'function_fts', ['name', 'content']);
+      await createFTSIndex('Class', 'class_fts', ['name', 'content']);
+      await createFTSIndex('Method', 'method_fts', ['name', 'content']);
+      await createFTSIndex('Interface', 'interface_fts', ['name', 'content']);
+    } catch (e: any) {
+      // Non-fatal — FTS is best-effort
+    }
+    const ftsTime = ((Date.now() - t0Fts) / 1000).toFixed(1);
+
+    // ── Phase 3.5: Re-insert cached embeddings ────────────────────────
+    if (cachedEmbeddings.length > 0) {
+      // Check if cached embedding dimensions match current schema
+      const cachedDims = cachedEmbeddings[0].embedding.length;
+      const { EMBEDDING_DIMS } = await import('../core/lbug/schema.js');
+      if (cachedDims !== EMBEDDING_DIMS) {
+        // Dimensions changed (e.g. switched embedding model) — discard cache and re-embed all
+        console.error(
+          `⚠️  Embedding dimensions changed (${cachedDims}d → ${EMBEDDING_DIMS}d), discarding cache`,
+        );
+        cachedEmbeddings = [];
+        cachedEmbeddingNodeIds = new Set();
+      } else {
+        updateBar(88, `Restoring ${cachedEmbeddings.length} cached embeddings...`);
+        const EMBED_BATCH = 200;
+        for (let i = 0; i < cachedEmbeddings.length; i += EMBED_BATCH) {
+          const batch = cachedEmbeddings.slice(i, i + EMBED_BATCH);
+          const paramsList = batch.map((e) => ({ nodeId: e.nodeId, embedding: e.embedding }));
+          try {
+            await executeWithReusedStatement(
+              `CREATE (e:CodeEmbedding {nodeId: $nodeId, embedding: $embedding})`,
+              paramsList,
+            );
+          } catch {
+            /* some may fail if node was removed, that's fine */
+          }
         }
       }
     }
-  }
 
-  // ── Phase 4: Embeddings (90–98%) ──────────────────────────────────
-  const stats = await getLbugStats();
-  let embeddingTime = '0.0';
-  let embeddingSkipped = true;
-  let embeddingSkipReason = 'off (use --embeddings to enable)';
+    // ── Phase 4: Embeddings (90–98%) ──────────────────────────────────
+    const stats = await getLbugStats();
+    let embeddingTime = '0.0';
+    let embeddingSkipped = true;
+    let embeddingSkipReason = 'off (use --embeddings to enable)';
 
-  if (options?.embeddings) {
-    if (stats.nodes > EMBEDDING_NODE_LIMIT) {
-      embeddingSkipReason = `skipped (${stats.nodes.toLocaleString()} nodes > ${EMBEDDING_NODE_LIMIT.toLocaleString()} limit)`;
-    } else {
-      embeddingSkipped = false;
+    if (options?.embeddings) {
+      if (stats.nodes > EMBEDDING_NODE_LIMIT) {
+        embeddingSkipReason = `skipped (${stats.nodes.toLocaleString()} nodes > ${EMBEDDING_NODE_LIMIT.toLocaleString()} limit)`;
+      } else {
+        embeddingSkipped = false;
+      }
     }
-  }
 
-  if (!embeddingSkipped) {
-    const { isHttpMode } = await import('../core/embeddings/http-client.js');
-    const httpMode = isHttpMode();
-    updateBar(90, httpMode ? 'Connecting to embedding endpoint...' : 'Loading embedding model...');
-    const t0Emb = Date.now();
-    const { runEmbeddingPipeline } = await import('../core/embeddings/embedding-pipeline.js');
-    await runEmbeddingPipeline(
-      executeQuery,
-      executeWithReusedStatement,
-      (progress) => {
-        const scaled = 90 + Math.round((progress.percent / 100) * 8);
-        const label =
-          progress.phase === 'loading-model'
-            ? httpMode
-              ? 'Connecting to embedding endpoint...'
-              : 'Loading embedding model...'
-            : `Embedding ${progress.nodesProcessed || 0}/${progress.totalNodes || '?'}`;
-        updateBar(scaled, label);
+    if (!embeddingSkipped) {
+      const { isHttpMode } = await import('../core/embeddings/http-client.js');
+      const httpMode = isHttpMode();
+      updateBar(
+        90,
+        httpMode ? 'Connecting to embedding endpoint...' : 'Loading embedding model...',
+      );
+      const t0Emb = Date.now();
+      const { runEmbeddingPipeline } = await import('../core/embeddings/embedding-pipeline.js');
+      await runEmbeddingPipeline(
+        executeQuery,
+        executeWithReusedStatement,
+        (progress) => {
+          const scaled = 90 + Math.round((progress.percent / 100) * 8);
+          const label =
+            progress.phase === 'loading-model'
+              ? httpMode
+                ? 'Connecting to embedding endpoint...'
+                : 'Loading embedding model...'
+              : `Embedding ${progress.nodesProcessed || 0}/${progress.totalNodes || '?'}`;
+          updateBar(scaled, label);
+        },
+        {},
+        cachedEmbeddingNodeIds.size > 0 ? cachedEmbeddingNodeIds : undefined,
+      );
+      embeddingTime = ((Date.now() - t0Emb) / 1000).toFixed(1);
+    }
+
+    // ── Phase 5: Finalize (98–100%) ───────────────────────────────────
+    updateBar(98, 'Saving metadata...');
+
+    // Count embeddings in the index (cached + newly generated)
+    let embeddingCount = 0;
+    try {
+      const embResult = await executeQuery(`MATCH (e:CodeEmbedding) RETURN count(e) AS cnt`);
+      embeddingCount = embResult?.[0]?.cnt ?? 0;
+    } catch {
+      /* table may not exist if embeddings never ran */
+    }
+
+    const meta = {
+      repoPath,
+      lastCommit: currentCommit,
+      indexedAt: new Date().toISOString(),
+      stats: {
+        files: pipelineResult.totalFileCount,
+        nodes: stats.nodes,
+        edges: stats.edges,
+        communities: pipelineResult.communityResult?.stats.totalCommunities,
+        processes: pipelineResult.processResult?.stats.totalProcesses,
+        embeddings: embeddingCount,
       },
-      {},
-      cachedEmbeddingNodeIds.size > 0 ? cachedEmbeddingNodeIds : undefined,
-    );
-    embeddingTime = ((Date.now() - t0Emb) / 1000).toFixed(1);
-  }
-
-  // ── Phase 5: Finalize (98–100%) ───────────────────────────────────
-  updateBar(98, 'Saving metadata...');
-
-  // Count embeddings in the index (cached + newly generated)
-  let embeddingCount = 0;
-  try {
-    const embResult = await executeQuery(`MATCH (e:CodeEmbedding) RETURN count(e) AS cnt`);
-    embeddingCount = embResult?.[0]?.cnt ?? 0;
-  } catch {
-    /* table may not exist if embeddings never ran */
-  }
-
-  const meta = {
-    repoPath,
-    lastCommit: currentCommit,
-    indexedAt: new Date().toISOString(),
-    stats: {
-      files: pipelineResult.totalFileCount,
-      nodes: stats.nodes,
-      edges: stats.edges,
-      communities: pipelineResult.communityResult?.stats.totalCommunities,
-      processes: pipelineResult.processResult?.stats.totalProcesses,
-      embeddings: embeddingCount,
-    },
-  };
-  await saveMeta(storagePath, meta);
-  await registerRepo(repoPath, meta);
-  // Only attempt to update .gitignore when a .git directory is present.
-  // Use hasGitDir (filesystem check) rather than git CLI subprocess
-  // so we skip correctly for --skip-git folders even if git CLI is available.
-  if (hasGitDir(repoPath)) {
-    await addToGitignore(repoPath);
-  }
-
-  const projectName = path.basename(repoPath);
-  let aggregatedClusterCount = 0;
-  if (pipelineResult.communityResult?.communities) {
-    const groups = new Map<string, number>();
-    for (const c of pipelineResult.communityResult.communities) {
-      const label = c.heuristicLabel || c.label || 'Unknown';
-      groups.set(label, (groups.get(label) || 0) + c.symbolCount);
+    };
+    await saveMeta(storagePath, meta);
+    await registerRepo(repoPath, meta);
+    // Only attempt to update .gitignore when a .git directory is present.
+    // Use hasGitDir (filesystem check) rather than git CLI subprocess
+    // so we skip correctly for --skip-git folders even if git CLI is available.
+    if (hasGitDir(repoPath)) {
+      await addToGitignore(repoPath);
     }
-    aggregatedClusterCount = Array.from(groups.values()).filter((count) => count >= 5).length;
-  }
 
-  let generatedSkills: GeneratedSkillInfo[] = [];
-  if (options?.skills && pipelineResult.communityResult) {
-    updateBar(99, 'Generating skill files...');
-    const skillResult = await generateSkillFiles(repoPath, projectName, pipelineResult);
-    generatedSkills = skillResult.skills;
-  }
+    const projectName = path.basename(repoPath);
+    let aggregatedClusterCount = 0;
+    if (pipelineResult.communityResult?.communities) {
+      const groups = new Map<string, number>();
+      for (const c of pipelineResult.communityResult.communities) {
+        const label = c.heuristicLabel || c.label || 'Unknown';
+        groups.set(label, (groups.get(label) || 0) + c.symbolCount);
+      }
+      aggregatedClusterCount = Array.from(groups.values()).filter((count) => count >= 5).length;
+    }
 
-  const aiContext = await generateAIContextFiles(
-    repoPath,
-    storagePath,
-    projectName,
-    {
-      files: pipelineResult.totalFileCount,
-      nodes: stats.nodes,
-      edges: stats.edges,
-      communities: pipelineResult.communityResult?.stats.totalCommunities,
-      clusters: aggregatedClusterCount,
-      processes: pipelineResult.processResult?.stats.totalProcesses,
-    },
-    generatedSkills,
-    {
-      skipAgentsMd: options?.skipAgentsMd,
-    },
-  );
+    let generatedSkills: GeneratedSkillInfo[] = [];
+    if (options?.skills && pipelineResult.communityResult) {
+      updateBar(99, 'Generating skill files...');
+      const skillResult = await generateSkillFiles(repoPath, projectName, pipelineResult);
+      generatedSkills = skillResult.skills;
+    }
 
-  await closeLbug();
-  // Note: we intentionally do NOT call disposeEmbedder() here.
-  // ONNX Runtime's native cleanup segfaults on macOS and some Linux configs.
-  // Since the process exits immediately after, Node.js reclaims everything.
-
-  const totalTime = ((Date.now() - t0Global) / 1000).toFixed(1);
-
-  clearInterval(elapsedTimer);
-  process.removeListener('SIGINT', sigintHandler);
-
-  console.log = origLog;
-  console.warn = origWarn;
-  console.error = origError;
-
-  bar.update(100, { phase: 'Done' });
-  bar.stop();
-
-  // ── Summary ───────────────────────────────────────────────────────
-  const embeddingsCached = cachedEmbeddings.length > 0;
-  console.log(
-    `\n  Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}\n`,
-  );
-  console.log(
-    `  ${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`,
-  );
-  console.log(
-    `  LadybugDB ${lbugTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`,
-  );
-  console.log(`  ${repoPath}`);
-
-  if (aiContext.files.length > 0) {
-    console.log(`  Context: ${aiContext.files.join(', ')}`);
-  }
-
-  // Show a quiet summary if some edge types needed fallback insertion
-  if (lbugWarnings.length > 0) {
-    const totalFallback = lbugWarnings.reduce((sum, w) => {
-      const m = w.match(/\((\d+) edges\)/);
-      return sum + (m ? parseInt(m[1]) : 0);
-    }, 0);
-    console.log(
-      `  Note: ${totalFallback} edges across ${lbugWarnings.length} types inserted via fallback (schema will be updated in next release)`,
+    const aiContext = await generateAIContextFiles(
+      repoPath,
+      storagePath,
+      projectName,
+      {
+        files: pipelineResult.totalFileCount,
+        nodes: stats.nodes,
+        edges: stats.edges,
+        communities: pipelineResult.communityResult?.stats.totalCommunities,
+        clusters: aggregatedClusterCount,
+        processes: pipelineResult.processResult?.stats.totalProcesses,
+      },
+      generatedSkills,
+      {
+        skipAgentsMd: options?.skipAgentsMd,
+      },
     );
-  }
 
-  try {
-    await fs.access(getGlobalRegistryPath());
-  } catch {
-    console.log('\n  Tip: Run `gitnexus setup` to configure MCP for your editor.');
-  }
+    await closeLbug();
+    // Note: we intentionally do NOT call disposeEmbedder() here.
+    // ONNX Runtime's native cleanup segfaults on macOS and some Linux configs.
+    // Since the process exits immediately after, Node.js reclaims everything.
 
-  console.log('');
+    const totalTime = ((Date.now() - t0Global) / 1000).toFixed(1);
+
+    clearInterval(elapsedTimer);
+    process.removeListener('SIGINT', sigintHandler);
+
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origError;
+
+    bar.update(100, { phase: 'Done' });
+    bar.stop();
+
+    // ── Summary ───────────────────────────────────────────────────────
+    const embeddingsCached = cachedEmbeddings.length > 0;
+    console.log(
+      `\n  Repository indexed successfully (${totalTime}s)${embeddingsCached ? ` [${cachedEmbeddings.length} embeddings cached]` : ''}\n`,
+    );
+    console.log(
+      `  ${stats.nodes.toLocaleString()} nodes | ${stats.edges.toLocaleString()} edges | ${pipelineResult.communityResult?.stats.totalCommunities || 0} clusters | ${pipelineResult.processResult?.stats.totalProcesses || 0} flows`,
+    );
+    console.log(
+      `  LadybugDB ${lbugTime}s | FTS ${ftsTime}s | Embeddings ${embeddingSkipped ? embeddingSkipReason : embeddingTime + 's'}`,
+    );
+    console.log(`  ${repoPath}`);
+
+    if (aiContext.files.length > 0) {
+      console.log(`  Context: ${aiContext.files.join(', ')}`);
+    }
+
+    // Show a quiet summary if some edge types needed fallback insertion
+    if (lbugWarnings.length > 0) {
+      const totalFallback = lbugWarnings.reduce((sum, w) => {
+        const m = w.match(/\((\d+) edges\)/);
+        return sum + (m ? parseInt(m[1]) : 0);
+      }, 0);
+      console.log(
+        `  Note: ${totalFallback} edges across ${lbugWarnings.length} types inserted via fallback (schema will be updated in next release)`,
+      );
+    }
+
+    try {
+      await fs.access(getGlobalRegistryPath());
+    } catch {
+      console.log('\n  Tip: Run `gitnexus setup` to configure MCP for your editor.');
+    }
+
+    console.log('');
+  } catch (err: any) {
+    clearInterval(elapsedTimer);
+    process.removeListener('SIGINT', sigintHandler);
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origError;
+    bar.stop();
+    try {
+      await closeLbug();
+    } catch {}
+    console.error(`\n  Analysis failed: ${err.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
 
   // LadybugDB's native module holds open handles that prevent Node from exiting.
   // ONNX Runtime also registers native atexit hooks that segfault on some
